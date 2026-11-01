@@ -54,7 +54,7 @@ const upload = multer({ storage });
 // All books API: returns all books with live copies_left count
 app.get("/books", async (req, res) => {
   try {
-    const books = await booksCollection.find().toArray();
+    const books = await booksCollection.find().sort({date: -1}).toArray();
     res.send(books);
   } catch (error) {
     console.error("Error fetching books:", error);
@@ -239,6 +239,7 @@ app.post("/my-borrows/:id", async (req, res) => {
     console.error("Error borrowing book:", error);
     res.status(500).send({ error: "Failed to process borrow request." });
   }
+  console.log()
 });
 
 // Return a borrowed book: POST /my-borrows/return/:id
