@@ -4,12 +4,13 @@ import { MongoClient, ObjectId } from "mongodb";
 import "dotenv/config";
 import multer from "multer";
 import path from "path";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 const app = express();
 const port = process.env.PORT || 8000;
 app.use(cors());
 app.use(express.json());
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+// app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 const client = new MongoClient(process.env.MONGODB_URI);
 export async function connectToMongoDB() {
@@ -40,21 +41,46 @@ const borrowsCollection = dataBase.collection("borrows");
 
 startServer();
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
-  },
-});
+const verifyApi = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
 
-const upload = multer({ storage });
+  if (!authHeader) {
+    return res.status(401).send({ msg: "Unauthorized!" });
+  }
 
-// All books API: returns all books with live copies_left count
+  const token = authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).send({ msg: "Unauthorized!" });
+  }
+
+  const JWKS = createRemoteJWKSet(
+    new URL(`${process.env.CLIENT_URL}/api/auth/jwks`),
+  );
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    next();
+  } catch (error) {
+    return res.status(500).send({ msg: "Server error!" });
+  }
+};
+
+// const storage = multer.diskStorage({
+//   destination: (req, file, cb) => {
+//     cb(null, "uploads/");
+//   },
+//   filename: (req, file, cb) => {
+//     cb(null, Date.now() + "-" + file.originalname);
+//   },
+// });
+
+// const upload = multer({ storage });
+
+// All books API: returns all books with live copies_left count - public
 app.get("/books", async (req, res) => {
   try {
-    const books = await booksCollection.find().sort({date: -1}).toArray();
+    const books = await booksCollection.find().sort({ date: -1 }).toArray();
     res.send(books);
   } catch (error) {
     console.error("Error fetching books:", error);
@@ -62,8 +88,8 @@ app.get("/books", async (req, res) => {
   }
 });
 
-// My-books API: returns books added by the logged-in user with live copies_left count
-app.get("/my-books", async (req, res) => {
+// My-books API: returns books added by the logged-in user with live copies_left count - private
+app.get("/my-books",verifyApi, async (req, res) => {
   try {
     const { email, added_by } = req.query;
     if (!email && !added_by) {
@@ -72,10 +98,14 @@ app.get("/my-books", async (req, res) => {
 
     const conditions = [];
     if (email && typeof email === "string" && email.trim()) {
-      conditions.push({ email: { $regex: new RegExp(`^${email.trim()}$`, "i") } });
+      conditions.push({
+        email: { $regex: new RegExp(`^${email.trim()}$`, "i") },
+      });
     }
     if (added_by && typeof added_by === "string" && added_by.trim()) {
-      conditions.push({ added_by: { $regex: new RegExp(`^${added_by.trim()}$`, "i") } });
+      conditions.push({
+        added_by: { $regex: new RegExp(`^${added_by.trim()}$`, "i") },
+      });
     }
 
     if (conditions.length === 0) {
@@ -90,8 +120,8 @@ app.get("/my-books", async (req, res) => {
   }
 });
 
-// My-books API with email param
-app.get("/my-books/:email", async (req, res) => {
+// My-books API with email param - private
+app.get("/my-books/:email",verifyApi, async (req, res) => {
   try {
     const { email } = req.params;
     if (!email || !email.trim()) {
@@ -109,8 +139,8 @@ app.get("/my-books/:email", async (req, res) => {
   }
 });
 
-// Check if user has already borrowed this specific book without returning it
-app.get("/my-borrows/check/:id", async (req, res) => {
+// Check if user has already borrowed this specific book without returning it - private
+app.get("/my-borrows/check/:id",verifyApi, async (req, res) => {
   try {
     const { id } = req.params;
     const { email } = req.query;
@@ -129,8 +159,8 @@ app.get("/my-borrows/check/:id", async (req, res) => {
   }
 });
 
-// Get user's active borrows
-app.get("/my-borrows", async (req, res) => {
+// Get user's active borrows - private
+app.get("/my-borrows",verifyApi, async (req, res) => {
   try {
     const { email } = req.query;
     if (!email || typeof email !== "string" || !email.trim()) {
@@ -150,9 +180,9 @@ app.get("/my-borrows", async (req, res) => {
   }
 });
 
-// Borrow a book by ID: POST /my-borrows/:id
+// Borrow a book by ID: POST /my-borrows/:id - private
 // Enforces 1-book-per-user restriction and decrements copies_left in booksCollection
-app.post("/my-borrows/:id", async (req, res) => {
+app.post("/my-borrows/:id",verifyApi, async (req, res) => {
   try {
     const { id } = req.params;
     const { email, user_name, return_days } = req.body;
@@ -172,13 +202,16 @@ app.post("/my-borrows/:id", async (req, res) => {
 
     if (existing) {
       return res.status(400).send({
-        error: "You have already borrowed this book. You cannot take the same book twice before returning it.",
+        error:
+          "You have already borrowed this book. You cannot take the same book twice before returning it.",
         alreadyBorrowed: true,
       });
     }
 
     // 2. Check if book exists and has available copies
-    const filter = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+    const filter = ObjectId.isValid(id)
+      ? { _id: new ObjectId(id) }
+      : { _id: id };
     const book = await booksCollection.findOne(filter);
 
     if (!book) {
@@ -188,7 +221,8 @@ app.post("/my-borrows/:id", async (req, res) => {
     const currentCopies = Number(book.copies_left);
     if (isNaN(currentCopies) || currentCopies <= 0) {
       return res.status(400).send({
-        error: "Sorry, this book is currently unavailable (no copies left in library).",
+        error:
+          "Sorry, this book is currently unavailable (no copies left in library).",
       });
     }
 
@@ -201,7 +235,9 @@ app.post("/my-borrows/:id", async (req, res) => {
     // 4. Save borrow record into borrowsCollection
     const duration = Number(return_days) || 7;
     const borrowedDate = new Date();
-    const dueDate = new Date(borrowedDate.getTime() + duration * 24 * 60 * 60 * 1000);
+    const dueDate = new Date(
+      borrowedDate.getTime() + duration * 24 * 60 * 60 * 1000,
+    );
 
     const borrowRecord = {
       book_id: String(book._id || id),
@@ -239,12 +275,12 @@ app.post("/my-borrows/:id", async (req, res) => {
     console.error("Error borrowing book:", error);
     res.status(500).send({ error: "Failed to process borrow request." });
   }
-  console.log()
+  console.log();
 });
 
-// Return a borrowed book: POST /my-borrows/return/:id
+// Return a borrowed book: POST /my-borrows/return/:id - private
 // Marks loan as returned and restores (+1) copies_left in booksCollection
-app.post("/my-borrows/return/:id", async (req, res) => {
+app.post("/my-borrows/return/:id",verifyApi, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -253,7 +289,10 @@ app.post("/my-borrows/return/:id", async (req, res) => {
       borrowRecord = await borrowsCollection.findOne({ _id: new ObjectId(id) });
     }
     if (!borrowRecord) {
-      borrowRecord = await borrowsCollection.findOne({ book_id: id, returned: false });
+      borrowRecord = await borrowsCollection.findOne({
+        book_id: id,
+        returned: false,
+      });
     }
 
     if (!borrowRecord) {
@@ -263,7 +302,7 @@ app.post("/my-borrows/return/:id", async (req, res) => {
     // Mark as returned
     await borrowsCollection.updateOne(
       { _id: borrowRecord._id },
-      { $set: { returned: true, returned_date: new Date() } }
+      { $set: { returned: true, returned_date: new Date() } },
     );
 
     // Increment copies_left in booksCollection
@@ -292,8 +331,8 @@ app.post("/my-borrows/return/:id", async (req, res) => {
   }
 });
 
-// Single book detail API
-app.get("/books/:id", async (req, res) => {
+// Single book detail API - private
+app.get("/books/:id", verifyApi, async (req, res) => {
   try {
     const { id } = req.params;
     let result = null;
@@ -310,18 +349,19 @@ app.get("/books/:id", async (req, res) => {
   }
 });
 
-// Add new book API: saves book with added_by and email
-app.post("/books", upload.single("book_image"), async (req, res) => {
+// Add new book API: saves book with added_by and email - private
+app.post("/books",verifyApi, async (req, res) => {
   try {
-    const book = {
-      ...req.body,
-      book_image: req.file ? `/uploads/${req.file.filename}` : req.body.book_image,
-      copies_left: Number(req.body.copies_left) || 1,
-      rating: Number(req.body.rating) || 4.5,
-      added_by: req.body.added_by || "Anonymous",
-      email: req.body.email || "",
-      createdAt: new Date(),
-    };
+    // const book = {
+    //   ...req.body,
+    //   book_image: req.body.book_image,
+    //   copies_left: Number(req.body.copies_left) || 1,
+    //   rating: Number(req.body.rating) || 4.5,
+    //   added_by: req.body.added_by || "Anonymous",
+    //   email: req.body.email || "",
+    //   createdAt: new Date(),
+    // };
+    const book = req.body;
     const result = await booksCollection.insertOne(book);
     res.send({ ...result, insertedId: result.insertedId, book });
   } catch (error) {
@@ -330,13 +370,13 @@ app.post("/books", upload.single("book_image"), async (req, res) => {
   }
 });
 
-// Update book API
-app.put("/books/:id", upload.single("book_image"), async (req, res) => {
+// Update book API - private
+app.put("/books/:id",verifyApi, async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = { ...req.body };
-    if (req.file) {
-      updateData.book_image = `/uploads/${req.file.filename}`;
+    if (req.body.book_image !== undefined) {
+      updateData.book_image = req.body.book_image;
     }
     if (updateData._id) {
       delete updateData._id;
@@ -347,7 +387,9 @@ app.put("/books/:id", upload.single("book_image"), async (req, res) => {
     if (updateData.rating !== undefined) {
       updateData.rating = Number(updateData.rating);
     }
-    const filter = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+    const filter = ObjectId.isValid(id)
+      ? { _id: new ObjectId(id) }
+      : { _id: id };
     await booksCollection.updateOne(filter, { $set: updateData });
     const updatedBook = await booksCollection.findOne(filter);
     res.send(updatedBook);
@@ -357,11 +399,13 @@ app.put("/books/:id", upload.single("book_image"), async (req, res) => {
   }
 });
 
-// Delete book API
-app.delete("/books/:id", async (req, res) => {
+// Delete book API - private
+app.delete("/books/:id",verifyApi, async (req, res) => {
   try {
     const { id } = req.params;
-    const filter = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+    const filter = ObjectId.isValid(id)
+      ? { _id: new ObjectId(id) }
+      : { _id: id };
     const result = await booksCollection.deleteOne(filter);
     res.send(result);
   } catch (error) {
