@@ -352,16 +352,8 @@ app.get("/books/:id", verifyApi, async (req, res) => {
 // Add new book API: saves book with added_by and email - private
 app.post("/books",verifyApi, async (req, res) => {
   try {
-    // const book = {
-    //   ...req.body,
-    //   book_image: req.body.book_image,
-    //   copies_left: Number(req.body.copies_left) || 1,
-    //   rating: Number(req.body.rating) || 4.5,
-    //   added_by: req.body.added_by || "Anonymous",
-    //   email: req.body.email || "",
-    //   createdAt: new Date(),
-    // };
-    const book = req.body;
+    const book = req.body
+    // const book = req.body;
     const result = await booksCollection.insertOne(book);
     res.send({ ...result, insertedId: result.insertedId, book });
   } catch (error) {
