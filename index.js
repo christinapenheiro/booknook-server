@@ -78,6 +78,14 @@ const verifyApi = async (req, res, next) => {
 // const upload = multer({ storage });
 
 // All books API: returns all books with live copies_left count - public
+
+app.get("/",async(req,res)=>{
+  res.send("Server is running fine.")
+})
+
+
+
+
 app.get("/books", async (req, res) => {
   try {
     const books = await booksCollection.find().sort({ date: -1 }).toArray();
