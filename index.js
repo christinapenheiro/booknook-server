@@ -96,6 +96,13 @@ app.get("/books", async (req, res) => {
   }
 });
 
+
+
+app.get("/featured",async(req,res)=>{
+  const result = await booksCollection.find().limit(6).toArray()
+  res.send(result)
+})
+
 // My-books API: returns books added by the logged-in user with live copies_left count - private
 app.get("/my-books",verifyApi, async (req, res) => {
   try {
