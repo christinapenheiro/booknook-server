@@ -405,3 +405,5 @@ app.delete("/books/:id",verifyApi, async (req, res) => {
     res.status(500).send({ error: "Failed to delete book" });
   }
 });
+
+export default app
