@@ -43,26 +43,30 @@ startServer();
 
 const verifyApi = async (req, res, next) => {
   const authHeader = req.headers.authorization;
-
   if (!authHeader) {
-    return res.status(401).send({ msg: "Unauthorized!" });
+    return res.status(401).send({ msg: "Unauthorized! No auth header." });
   }
 
   const token = authHeader.split(" ")[1];
-
   if (!token) {
-    return res.status(401).send({ msg: "Unauthorized!" });
+    return res.status(401).send({ msg: "Unauthorized! No token found." });
   }
 
-  const JWKS = createRemoteJWKSet(
-    new URL(`${process.env.CLIENT_URL}/api/auth/jwks`),
-  );
-
   try {
+    const JWKS = createRemoteJWKSet(
+      new URL(`${process.env.CLIENT_URL}/api/auth/jwks`),
+    );
     const { payload } = await jwtVerify(token, JWKS);
+    req.user = payload; // Attach user payload if needed
     next();
   } catch (error) {
-    return res.status(500).send({ msg: "Server error!" });
+    console.error("JWKS Verification Error:", error.message); // 👈 Check your console for this log!
+    return res
+      .status(500)
+      .send({
+        msg: "Server error during token verification!",
+        details: error.message,
+      });
   }
 };
 
@@ -183,26 +187,6 @@ app.get("/featured",async(req,res)=>{
   res.send(result)
 })
 
-// My-books API with email param - private
-app.get("/my-books/:email",verifyApi, async (req, res) => {
-  try {
-    const { email } = req.params;
-    if (!email || !email.trim()) {
-      return res.send([]);
-    }
-    const books = await booksCollection
-      .find({
-        email: { $regex: new RegExp(`^${email.trim()}$`, "i") },
-      })
-      .toArray();
-    res.send(books);
-  } catch (error) {
-    console.error("Error fetching my-books by email parameter:", error);
-    res.status(500).send({ error: "Failed to fetch my-books" });
-  }
-});
-
-
 
 // My-books API: returns books added by the logged-in user with live copies_left count - private
 app.get("/my-books",verifyApi, async (req, res) => {
@@ -233,6 +217,52 @@ app.get("/my-books",verifyApi, async (req, res) => {
   } catch (error) {
     console.error("Error fetching my-books:", error);
     res.status(500).send({ error: "Failed to fetch my-books" });
+  }
+});
+
+
+
+// My-books API with email param - private
+app.get("/my-books/:email",verifyApi, async (req, res) => {
+  try {
+    const { email } = req.params;
+    if (!email || !email.trim()) {
+      return res.send([]);
+    }
+    const books = await booksCollection
+      .find({
+        email: { $regex: new RegExp(`^${email.trim()}$`, "i") },
+      })
+      .toArray();
+    res.send(books);
+  } catch (error) {
+    console.error("Error fetching my-books by email parameter:", error);
+    res.status(500).send({ error: "Failed to fetch my-books" });
+  }
+});
+
+
+
+
+
+// Get user's active borrows - private
+app.get("/my-borrows",verifyApi, async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email || typeof email !== "string" || !email.trim()) {
+      return res.send([]);
+    }
+    const userBorrows = await borrowsCollection
+      .find({
+        user_email: { $regex: new RegExp(`^${email.trim()}$`, "i") },
+        returned: false,
+      })
+      .sort({ createdAt: -1 })
+      .toArray();
+    res.send(userBorrows);
+  } catch (error) {
+    console.error("Error fetching my-borrows:", error);
+    res.status(500).send({ error: "Failed to fetch borrowed books" });
   }
 });
 
@@ -313,26 +343,7 @@ app.post("/my-borrows/return/:id",verifyApi, async (req, res) => {
 });
 
 
-// Get user's active borrows - private
-app.get("/my-borrows",verifyApi, async (req, res) => {
-  try {
-    const { email } = req.query;
-    if (!email || typeof email !== "string" || !email.trim()) {
-      return res.send([]);
-    }
-    const userBorrows = await borrowsCollection
-      .find({
-        user_email: { $regex: new RegExp(`^${email.trim()}$`, "i") },
-        returned: false,
-      })
-      .sort({ createdAt: -1 })
-      .toArray();
-    res.send(userBorrows);
-  } catch (error) {
-    console.error("Error fetching my-borrows:", error);
-    res.status(500).send({ error: "Failed to fetch borrowed books" });
-  }
-});
+
 
 // Borrow a book by ID: POST /my-borrows/:id - private
 // Enforces 1-book-per-user restriction and decrements copies_left in booksCollection
