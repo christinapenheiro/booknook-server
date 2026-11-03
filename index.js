@@ -92,7 +92,7 @@ app.get("/",async(req,res)=>{
 
 app.get("/books", async (req, res) => {
   try {
-    const books = await booksCollection.find().sort({ date: -1 }).toArray();
+    const books = await booksCollection.find().toArray();
     res.send(books);
   } catch (error) {
     console.error("Error fetching books:", error);
@@ -183,7 +183,7 @@ app.delete("/books/:id",verifyApi, async (req, res) => {
 
 
 app.get("/featured",async(req,res)=>{
-  const result = await booksCollection.find().limit(6).toArray()
+  const result = await booksCollection.find().limit(6).sort({ date: -1 }).toArray()
   res.send(result)
 })
 
