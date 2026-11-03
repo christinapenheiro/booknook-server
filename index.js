@@ -97,11 +97,112 @@ app.get("/books", async (req, res) => {
 });
 
 
+// Add new book API: saves book with added_by and email - private
+app.post("/books",verifyApi, async (req, res) => {
+  try {
+    const book = req.body
+    // const book = req.body;
+    const result = await booksCollection.insertOne(book);
+    res.send({ ...result, insertedId: result.insertedId, book });
+  } catch (error) {
+    console.error("Error creating book:", error);
+    res.status(500).send({ error: "Failed to create book" });
+  }
+});
+
+
+// Single book detail API - private
+app.get("/books/:id", verifyApi, async (req, res) => {
+  try {
+    const { id } = req.params;
+    let result = null;
+    if (ObjectId.isValid(id)) {
+      result = await booksCollection.findOne({ _id: new ObjectId(id) });
+    }
+    if (!result) {
+      result = await booksCollection.findOne({ _id: id });
+    }
+    res.send(result);
+  } catch (error) {
+    console.error("Error fetching book:", error);
+    res.status(500).send({ error: "Failed to fetch book" });
+  }
+});
+
+// Update book API - private
+app.put("/books/:id",verifyApi, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = { ...req.body };
+    if (req.body.book_image !== undefined) {
+      updateData.book_image = req.body.book_image;
+    }
+    if (updateData._id) {
+      delete updateData._id;
+    }
+    if (updateData.copies_left !== undefined) {
+      updateData.copies_left = Number(updateData.copies_left);
+    }
+    if (updateData.rating !== undefined) {
+      updateData.rating = Number(updateData.rating);
+    }
+    const filter = ObjectId.isValid(id)
+      ? { _id: new ObjectId(id) }
+      : { _id: id };
+    await booksCollection.updateOne(filter, { $set: updateData });
+    const updatedBook = await booksCollection.findOne(filter);
+    res.send(updatedBook);
+  } catch (error) {
+    console.error("Error updating book:", error);
+    res.status(500).send({ error: "Failed to update book" });
+  }
+});
+
+// Delete book API - private
+app.delete("/books/:id",verifyApi, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const filter = ObjectId.isValid(id)
+      ? { _id: new ObjectId(id) }
+      : { _id: id };
+    const result = await booksCollection.deleteOne(filter);
+    res.send(result);
+  } catch (error) {
+    console.error("Error deleting book:", error);
+    res.status(500).send({ error: "Failed to delete book" });
+  }
+});
+
+
+
+
+
 
 app.get("/featured",async(req,res)=>{
   const result = await booksCollection.find().limit(6).toArray()
   res.send(result)
 })
+
+// My-books API with email param - private
+app.get("/my-books/:email",verifyApi, async (req, res) => {
+  try {
+    const { email } = req.params;
+    if (!email || !email.trim()) {
+      return res.send([]);
+    }
+    const books = await booksCollection
+      .find({
+        email: { $regex: new RegExp(`^${email.trim()}$`, "i") },
+      })
+      .toArray();
+    res.send(books);
+  } catch (error) {
+    console.error("Error fetching my-books by email parameter:", error);
+    res.status(500).send({ error: "Failed to fetch my-books" });
+  }
+});
+
+
 
 // My-books API: returns books added by the logged-in user with live copies_left count - private
 app.get("/my-books",verifyApi, async (req, res) => {
@@ -135,24 +236,7 @@ app.get("/my-books",verifyApi, async (req, res) => {
   }
 });
 
-// My-books API with email param - private
-app.get("/my-books/:email",verifyApi, async (req, res) => {
-  try {
-    const { email } = req.params;
-    if (!email || !email.trim()) {
-      return res.send([]);
-    }
-    const books = await booksCollection
-      .find({
-        email: { $regex: new RegExp(`^${email.trim()}$`, "i") },
-      })
-      .toArray();
-    res.send(books);
-  } catch (error) {
-    console.error("Error fetching my-books by email parameter:", error);
-    res.status(500).send({ error: "Failed to fetch my-books" });
-  }
-});
+
 
 // Check if user has already borrowed this specific book without returning it - private
 app.get("/my-borrows/check/:id",verifyApi, async (req, res) => {
@@ -173,6 +257,61 @@ app.get("/my-borrows/check/:id",verifyApi, async (req, res) => {
     res.status(500).send({ error: "Failed to check borrow status" });
   }
 });
+
+
+// Return a borrowed book: POST /my-borrows/return/:id - private
+// Marks loan as returned and restores (+1) copies_left in booksCollection
+app.post("/my-borrows/return/:id",verifyApi, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    let borrowRecord = null;
+    if (ObjectId.isValid(id)) {
+      borrowRecord = await borrowsCollection.findOne({ _id: new ObjectId(id) });
+    }
+    if (!borrowRecord) {
+      borrowRecord = await borrowsCollection.findOne({
+        book_id: id,
+        returned: false,
+      });
+    }
+
+    if (!borrowRecord) {
+      return res.status(404).send({ error: "Borrow record not found." });
+    }
+
+    // Mark as returned
+    await borrowsCollection.updateOne(
+      { _id: borrowRecord._id },
+      { $set: { returned: true, returned_date: new Date() } },
+    );
+
+    // Increment copies_left in booksCollection
+    const bookId = borrowRecord.book_id;
+    const updateQuery = ObjectId.isValid(bookId)
+      ? { _id: new ObjectId(bookId) }
+      : { _id: bookId };
+
+    const targetBook = await booksCollection.findOne(updateQuery);
+    let updatedCopies = 1;
+    if (targetBook) {
+      updatedCopies = (Number(targetBook.copies_left) || 0) + 1;
+      await booksCollection.updateOne(updateQuery, {
+        $set: { copies_left: updatedCopies },
+      });
+    }
+
+    res.send({
+      success: true,
+      message: `"${borrowRecord.book_title}" returned successfully.`,
+      copies_left: updatedCopies,
+    });
+  } catch (error) {
+    console.error("Error returning book:", error);
+    res.status(500).send({ error: "Failed to return book." });
+  }
+});
+
 
 // Get user's active borrows - private
 app.get("/my-borrows",verifyApi, async (req, res) => {
@@ -293,132 +432,7 @@ app.post("/my-borrows/:id",verifyApi, async (req, res) => {
   console.log();
 });
 
-// Return a borrowed book: POST /my-borrows/return/:id - private
-// Marks loan as returned and restores (+1) copies_left in booksCollection
-app.post("/my-borrows/return/:id",verifyApi, async (req, res) => {
-  try {
-    const { id } = req.params;
 
-    let borrowRecord = null;
-    if (ObjectId.isValid(id)) {
-      borrowRecord = await borrowsCollection.findOne({ _id: new ObjectId(id) });
-    }
-    if (!borrowRecord) {
-      borrowRecord = await borrowsCollection.findOne({
-        book_id: id,
-        returned: false,
-      });
-    }
 
-    if (!borrowRecord) {
-      return res.status(404).send({ error: "Borrow record not found." });
-    }
 
-    // Mark as returned
-    await borrowsCollection.updateOne(
-      { _id: borrowRecord._id },
-      { $set: { returned: true, returned_date: new Date() } },
-    );
-
-    // Increment copies_left in booksCollection
-    const bookId = borrowRecord.book_id;
-    const updateQuery = ObjectId.isValid(bookId)
-      ? { _id: new ObjectId(bookId) }
-      : { _id: bookId };
-
-    const targetBook = await booksCollection.findOne(updateQuery);
-    let updatedCopies = 1;
-    if (targetBook) {
-      updatedCopies = (Number(targetBook.copies_left) || 0) + 1;
-      await booksCollection.updateOne(updateQuery, {
-        $set: { copies_left: updatedCopies },
-      });
-    }
-
-    res.send({
-      success: true,
-      message: `"${borrowRecord.book_title}" returned successfully.`,
-      copies_left: updatedCopies,
-    });
-  } catch (error) {
-    console.error("Error returning book:", error);
-    res.status(500).send({ error: "Failed to return book." });
-  }
-});
-
-// Single book detail API - private
-app.get("/books/:id", verifyApi, async (req, res) => {
-  try {
-    const { id } = req.params;
-    let result = null;
-    if (ObjectId.isValid(id)) {
-      result = await booksCollection.findOne({ _id: new ObjectId(id) });
-    }
-    if (!result) {
-      result = await booksCollection.findOne({ _id: id });
-    }
-    res.send(result);
-  } catch (error) {
-    console.error("Error fetching book:", error);
-    res.status(500).send({ error: "Failed to fetch book" });
-  }
-});
-
-// Add new book API: saves book with added_by and email - private
-app.post("/books",verifyApi, async (req, res) => {
-  try {
-    const book = req.body
-    // const book = req.body;
-    const result = await booksCollection.insertOne(book);
-    res.send({ ...result, insertedId: result.insertedId, book });
-  } catch (error) {
-    console.error("Error creating book:", error);
-    res.status(500).send({ error: "Failed to create book" });
-  }
-});
-
-// Update book API - private
-app.put("/books/:id",verifyApi, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const updateData = { ...req.body };
-    if (req.body.book_image !== undefined) {
-      updateData.book_image = req.body.book_image;
-    }
-    if (updateData._id) {
-      delete updateData._id;
-    }
-    if (updateData.copies_left !== undefined) {
-      updateData.copies_left = Number(updateData.copies_left);
-    }
-    if (updateData.rating !== undefined) {
-      updateData.rating = Number(updateData.rating);
-    }
-    const filter = ObjectId.isValid(id)
-      ? { _id: new ObjectId(id) }
-      : { _id: id };
-    await booksCollection.updateOne(filter, { $set: updateData });
-    const updatedBook = await booksCollection.findOne(filter);
-    res.send(updatedBook);
-  } catch (error) {
-    console.error("Error updating book:", error);
-    res.status(500).send({ error: "Failed to update book" });
-  }
-});
-
-// Delete book API - private
-app.delete("/books/:id",verifyApi, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const filter = ObjectId.isValid(id)
-      ? { _id: new ObjectId(id) }
-      : { _id: id };
-    const result = await booksCollection.deleteOne(filter);
-    res.send(result);
-  } catch (error) {
-    console.error("Error deleting book:", error);
-    res.status(500).send({ error: "Failed to delete book" });
-  }
-});
-
-export default app
+export default app;
